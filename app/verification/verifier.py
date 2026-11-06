@@ -46,6 +46,12 @@ _TERMINAL_TYPES = (
     EvidenceEventType.RELEASE_REPLAY_ATTEMPTED,
 )
 
+_LIVE_DISPATCH_TYPES = (
+    EvidenceEventType.DISPATCH_ATTEMPTED,
+    EvidenceEventType.DISPATCH_ACCEPTED,
+    EvidenceEventType.IN_FLIGHT,
+)
+
 _RETRY_SAFE_STATES = (
     OperationState.CREATED,
     OperationState.RELEASE_ISSUED,
@@ -116,6 +122,12 @@ class IndependentVerifier:
             failed.append(f"unparseable_events:{parse_failures}")
 
         terminal_event = self._find_last_terminal(events)
+        # A terminal event recorded before a later live dispatch (e.g. a fenced
+        # rejection followed by a successful retry) no longer describes the
+        # operation. Ignore it so the live dispatch is not reported as safely
+        # rejected.
+        if terminal_event is not None and self._live_dispatch_after(events, terminal_event):
+            terminal_event = None
         terminal_classification: Optional[TerminalClassification] = None
         terminal_assert_failed = False
 
@@ -212,6 +224,16 @@ class IndependentVerifier:
 
     def verify_ledger(self) -> Tuple[bool, int]:
         return self._ledger.verify_chain(), len(self._ledger.read_all())
+
+    def _live_dispatch_after(self, events: List[EvidenceEvent], terminal: EvidenceEvent) -> bool:
+        seen_terminal = False
+        for e in events:
+            if e is terminal:
+                seen_terminal = True
+                continue
+            if seen_terminal and e.event_type in _LIVE_DISPATCH_TYPES:
+                return True
+        return False
 
     def _find_last_terminal(self, events: List[EvidenceEvent]) -> Optional[EvidenceEvent]:
         for e in reversed(events):
